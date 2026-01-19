@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -82,7 +84,7 @@ func fetchAuthenticated() ([]byte, error) {
 	// Check if authenticated by trying to get auth status
 	_, _, err := gh.Exec("auth", "status")
 	if err != nil {
-		return nil, fmt.Errorf("not authenticated\nRun `gh auth login` to authenticate, or use `gh rate-limit --anonymous` to check unauthenticated rate limits")
+		return nil, errors.New("not authenticated\nRun `gh auth login` to authenticate, or use `gh rate-limit --anonymous` to check unauthenticated rate limits")
 	}
 
 	client, err := api.DefaultRESTClient()
@@ -100,11 +102,17 @@ func fetchAuthenticated() ([]byte, error) {
 }
 
 func fetchAnonymous() ([]byte, error) {
-	resp, err := http.Get("https://api.github.com/rate_limit")
+	ctx := context.Background()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/rate_limit", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch rate limits: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -158,12 +166,8 @@ func displayRateLimits(rateLimit RateLimitResponse, absolute bool) error {
 	resetTimeWidth := 25
 	fixedWidth := maxNameLen + 2 + maxCountLen + 2 + 2 + resetTimeWidth
 	progressBarWidth := termWidth - fixedWidth
-	if progressBarWidth < 10 {
-		progressBarWidth = 10
-	}
-	if progressBarWidth > 40 {
-		progressBarWidth = 40
-	}
+	progressBarWidth = max(progressBarWidth, 10)
+	progressBarWidth = min(progressBarWidth, 40)
 
 	// Display each category
 	for _, cat := range categories {
@@ -229,19 +233,13 @@ func displayCategory(cat CategoryLimit, nameWidth, countWidth, barWidth int, abs
 func buildProgressBar(pctUsed float64, width int, isTTY bool, pctRemaining float64) string {
 	if !isTTY {
 		// Simple ASCII progress bar for non-TTY
-		filled := int(pctUsed / 100.0 * float64(width))
-		if filled > width {
-			filled = width
-		}
+		filled := min(int(pctUsed/100.0*float64(width)), width)
 		return "[" + strings.Repeat("#", filled) + strings.Repeat("-", width-filled) + "]"
 	}
 
 	// Unicode block progress bar for TTY
 	// Filled portion represents percentage used
-	filledCount := int(pctUsed / 100.0 * float64(width))
-	if filledCount > width {
-		filledCount = width
-	}
+	filledCount := min(int(pctUsed/100.0*float64(width)), width)
 	emptyCount := width - filledCount
 
 	// Build the bar with color based on remaining percentage
@@ -258,15 +256,16 @@ func getColor(pctRemaining float64) int {
 	// Yellow/Orange (20-50%): gradient from 226 (yellow) to 208 (orange)
 	// Red (< 20%): gradient from 208 to 196 (red)
 
-	if pctRemaining > 50 {
+	switch {
+	case pctRemaining > 50:
 		// Green
 		return 46
-	} else if pctRemaining > 20 {
+	case pctRemaining > 20:
 		// Yellow to Orange gradient (50% -> 20%)
 		// Map 50-20 to 226-208
 		ratio := (pctRemaining - 20) / 30.0 // 0 to 1
 		return 208 + int(ratio*18)          // 208 to 226
-	} else {
+	default:
 		// Orange to Red gradient (20% -> 0%)
 		// Map 20-0 to 208-196
 		ratio := pctRemaining / 20.0 // 0 to 1
