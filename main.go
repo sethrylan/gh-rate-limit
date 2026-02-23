@@ -108,7 +108,7 @@ func fetchAnonymous() ([]byte, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // URL is a hardcoded constant
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch rate limits: %w", err)
 	}
